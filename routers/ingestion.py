@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any
 
 import logging
+import asyncio
+import time
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import ValidationError
@@ -22,6 +24,20 @@ from services.ai_processor import AIProcessor
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+# Simple in-memory circuit-breaker state (process-local)
+_failure_timestamps: list[float] = []
+_failure_window_seconds = 60
+_failure_threshold = 5
+
+
+def _is_circuit_open() -> bool:
+	now = time.time()
+	# purge old timestamps
+	cutoff = now - _failure_window_seconds
+	while _failure_timestamps and _failure_timestamps[0] < cutoff:
+		_failure_timestamps.pop(0)
+	return len(_failure_timestamps) >= _failure_threshold
 
 
 def _normalize_to_entities(result: object) -> list[ExtractedEntitySchema]:
@@ -72,6 +88,10 @@ async def ingest_document(request: ScrapeRequest, db: Session = Depends(get_db))
 	max_validation_attempts = 3
 	attempts = 0
 	last_exc: Exception | None = None
+
+	# Fast-fail if circuit is open
+	if _is_circuit_open():
+		raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail="LLM circuit open; try later")
 	while attempts < max_validation_attempts:
 		try:
 			result = processor.extract(text)
@@ -81,6 +101,10 @@ async def ingest_document(request: ScrapeRequest, db: Session = Depends(get_db))
 			attempts += 1
 			last_exc = ve
 			logger.warning("LLM output failed schema validation (attempt %s/%s): %s", attempts, max_validation_attempts, ve)
+			# Backoff before retry
+			backoff_seconds = min(2 ** attempts, 16)
+			logger.info("Waiting %.1fs before retrying LLM validation", backoff_seconds)
+			await asyncio.sleep(backoff_seconds)
 			# Immediate retry and validate
 			try:
 				retry_result = processor.extract(text)
@@ -93,13 +117,19 @@ async def ingest_document(request: ScrapeRequest, db: Session = Depends(get_db))
 			except Exception as exc:
 				last_exc = exc
 				logger.error("LLM call failed during retry: %s", exc)
+				# record failure timestamp for circuit-breaker
+				_failure_timestamps.append(time.time())
 				raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
 		except Exception as exc:
 			# Non-validation error from the LLM call
 			logger.error("LLM extraction failed: %s", exc)
+			# record failure timestamp for circuit-breaker
+			_failure_timestamps.append(time.time())
 			raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc))
 	else:
 		# Exhausted retries
+		# record failure timestamp for circuit-breaker
+		_failure_timestamps.append(time.time())
 		raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=str(last_exc))
 
 	response_items: list[dict[str, Any]] = []

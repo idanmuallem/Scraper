@@ -1,6 +1,13 @@
 from pydantic import BaseModel, Field
 from typing import List
 from datetime import datetime
+from enum import Enum
+
+
+class Sentiment(str, Enum):
+	Positive = "Positive"
+	Negative = "Negative"
+	Neutral = "Neutral"
 
 
 class ExtractedEntitySchema(BaseModel):
@@ -9,7 +16,7 @@ class ExtractedEntitySchema(BaseModel):
 	for every supply chain or ESG mention it finds.
 	"""
 	ticker: str = Field(..., description="The stock ticker symbol of the company mentioned.")
-	sentiment: str = Field(..., description="Must be exactly 'Positive', 'Negative', or 'Neutral'.")
+	sentiment: Sentiment = Field(..., description="Must be exactly 'Positive', 'Negative', or 'Neutral'.")
 	insight: str = Field(..., description="A concise, 1-2 sentence summary of the extracted data point.")
 
 

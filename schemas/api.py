@@ -1,94 +1,69 @@
-from __future__ import annotations
-
+from pydantic import BaseModel, Field
+from typing import List
 from datetime import datetime
-from typing import Any
-
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
 
 
+class ExtractedEntitySchema(BaseModel):
+	"""
+	The strict JSON structure we require the LLM to output 
+	for every supply chain or ESG mention it finds.
+	"""
+	ticker: str = Field(..., description="The stock ticker symbol of the company mentioned.")
+	sentiment: str = Field(..., description="Must be exactly 'Positive', 'Negative', or 'Neutral'.")
+	insight: str = Field(..., description="A concise, 1-2 sentence summary of the extracted data point.")
+
+
+class DocumentExtractionResult(BaseModel):
+	"""
+	The wrapper schema that holds a list of all entities 
+	found in a single raw document.
+	"""
+	source_url: str
+	extracted_entities: List[ExtractedEntitySchema] = Field(default_factory=list)
+
+
+class APIResponseSchema(BaseModel):
+	"""
+	The schema used to return data to your paying API customers.
+	"""
+	id: int
+	ticker: str
+	sentiment: str
+	insight: str
+	created_at: datetime
+
+	class Config:
+		from_attributes = True
+
+
+# Backwards-compatible aliases for earlier internal names used in tests and routers
 class ScrapeRequest(BaseModel):
-	"""Request body for scraping a financial document from a URL."""
-
-	source_url: HttpUrl
-	source_type: str | None = Field(default=None, examples=["10-K", "Earnings Call"])
+	source_url: str
+	source_type: str | None = None
 
 
 class RawDocumentCreate(BaseModel):
-	"""Payload used when persisting raw scraped content."""
-
-	source_url: HttpUrl
+	source_url: str
 	content: str
 	source_type: str | None = None
 
 
 class RawDocumentRead(BaseModel):
-	"""Response shape for a stored raw document."""
-
-	model_config = ConfigDict(from_attributes=True)
-
 	id: int
-	source_url: HttpUrl
+	source_url: str
 	content: str
 	source_type: str | None = None
 	scraped_at: datetime
 
 
-class ExtractedEntityBase(BaseModel):
-	"""Shared fields for extracted AI entity data."""
-
-	ticker: str = Field(..., examples=["AAPL", "MSFT"])
-	sentiment: str | None = Field(default=None, examples=["Positive", "Negative", "Neutral"])
-	insight: str = Field(..., description="The extracted business or financial insight.")
-
-
-class ExtractedEntityCreate(ExtractedEntityBase):
-	"""Payload used when storing AI extracted entities."""
-
-	document_id: int
-
-
-class ExtractedEntityRead(ExtractedEntityBase):
-	"""Response shape for extracted entities."""
-
-	model_config = ConfigDict(from_attributes=True)
-
-	id: int
-	document_id: int
-	created_at: datetime
-
-
-class EntityExtractionRequest(BaseModel):
-	"""Input text sent to the AI extraction step."""
-
-	text: str = Field(..., min_length=1)
-
-
-class EntityExtractionResult(BaseModel):
-	"""Strict JSON contract for the LLM extraction response."""
-
-	ticker: str = Field(..., examples=["AAPL", "MSFT"])
-	sentiment: str | None = Field(default=None, examples=["Positive", "Negative", "Neutral"])
-	insight: str = Field(..., description="A concise extracted insight in plain English.")
-
-
-class EntityExtractionResponse(BaseModel):
-	"""Wrapper around a single validated extraction result."""
-
-	model_config = ConfigDict(from_attributes=True)
-
-	data: EntityExtractionResult
+class EntityExtractionResult(ExtractedEntitySchema):
+	"""Alias: keep compatibility with previous name used in tests."""
 
 
 class EntityExtractionBatchResponse(BaseModel):
-	"""Wrapper for multiple extracted entities."""
-
-	model_config = ConfigDict(from_attributes=True)
-
-	data: list[EntityExtractionResult]
+	data: List[EntityExtractionResult] = Field(default_factory=list)
 
 
 class ErrorResponse(BaseModel):
-	"""Standard API error payload."""
-
 	detail: str
-	metadata: dict[str, Any] | None = None
+	metadata: dict | None = None
